@@ -4,10 +4,13 @@ on:
   push:
     branches:
       - develop
+    paths:
+      - 'force-app/**'
 
 jobs:
   deploy-qa:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
@@ -22,19 +25,19 @@ jobs:
 
       - name: Authenticate to QA Org via JWT
         run: |
-          echo "${{ secrets.SFDX_SERVER_KEY_QA }}" > server.key
+          echo "${{ secrets.SFDC_SERVER_KEY }}" > server.key
           sf org login jwt \
-            --client-id ${{ secrets.SFDX_CLIENT_ID_QA }} \
+            --client-id ${{ secrets.SFDC_CLIENT_ID }} \
             --jwt-key-file server.key \
-            --username ${{ secrets.SFDX_USERNAME_QA }} \
-            --instance-url https://login.salesforce.com \
-            --alias QAOrg \
-            --set-default
+            --username ${{ secrets.SFDC_USERNAME }} \
+            --instance-url https://test.salesforce.com \
+            --alias QAOrg
           rm server.key
 
-      - name: Deploy Source to QA
+      - name: Deploy Source to QA Org
         run: |
           sf project deploy start \
             --source-dir force-app \
             --target-org QAOrg \
+            --test-level RunLocalTests \
             --wait 30
