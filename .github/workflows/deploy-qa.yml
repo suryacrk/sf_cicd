@@ -1,0 +1,35 @@
+name: Deploy to QA Environment
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  deploy-qa:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to QA Org
+        run: |
+          echo "${{ secrets.SFDX_AUTH_URL_QA }}" > auth.txt
+          sf org login sfdx-url --sfdx-url-file auth.txt --alias QAOrg --set-default
+          rm auth.txt
+
+      - name: Deploy Source to QA
+        run: |
+          sf project deploy start \
+            --source-dir force-app \
+            --target-org QAOrg \
+            --test-level RunLocalTests \
+            --wait 30
