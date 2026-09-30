@@ -15,6 +15,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Secret scan: fails the run if a key, token or password was committed.
+      # Repos owned by a GitHub organization also need a free license key:
+      # add GITLEAKS_LICENSE as a repo secret and uncomment the env line below.
+      - name: Scan for secrets (Gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -29,11 +38,15 @@ jobs:
 
       # Fails the job on High (2) or Critical (1) violations.
       # Use --severity-threshold 3 for a softer start.
+      # Rules come from Recommended + cpd (copy/paste detection), plus any custom
+      # rules in code-analyzer.yml at the repo root (loaded automatically).
       - name: Run Salesforce Code Analyzer
         run: |
           sf code-analyzer run \
             --workspace force-app \
             --target force-app \
+            --rule-selector Recommended \
+            --rule-selector cpd \
             --severity-threshold 2 \
             --output-file code-analyzer-results.html \
             --output-file code-analyzer-results.json
@@ -57,7 +70,9 @@ jobs:
             --set-default
           rm server.key
 
-      # Original validate step, plus explicit test level and coverage output
+      # Original validate step, plus explicit test level and coverage output.
+      # RunLocalTests runs ALL local tests in the org and requires 75% coverage
+      # averaged across every Apex class and trigger in the org.
       - name: Validate Source Deployment against QA
         run: |
           sf project deploy validate \
@@ -65,6 +80,7 @@ jobs:
             --target-org QAOrg \
             --wait 30 \
             --test-level RunLocalTests \
+            --verbose \
             --coverage-formatters json-summary \
             --coverage-formatters text-summary \
             --junit \
