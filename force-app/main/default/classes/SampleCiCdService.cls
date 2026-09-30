@@ -1,8 +1,12 @@
 /**
- * @description Small service class used to demonstrate CI/CD code coverage 09-29 08:00 PM.
+ * @description Small service class used to demonstrate CI/CD code coverage.
+ * Every method has multiple branches, all exercised by SampleCiCdTest.
  */
 public with sharing class SampleCiCdService {
 
+    /**
+     * @description Adds two integers. Returns 0 if either input is null.
+     */
     public static Integer add(Integer a, Integer b) {
         if (a == null || b == null) {
             return 0;
@@ -10,6 +14,9 @@ public with sharing class SampleCiCdService {
         return a + b;
     }
 
+    /**
+     * @description Classifies an integer as UNKNOWN, NEGATIVE, ZERO or POSITIVE.
+     */
     public static String classifyNumber(Integer value) {
         if (value == null) {
             return 'UNKNOWN';
@@ -21,6 +28,9 @@ public with sharing class SampleCiCdService {
         return 'POSITIVE';
     }
 
+    /**
+     * @description Builds a greeting. Blank names become "Guest".
+     */
     public static String formatGreeting(String name) {
         if (String.isBlank(name)) {
             return 'Hello, Guest!';
@@ -28,6 +38,9 @@ public with sharing class SampleCiCdService {
         return 'Hello, ' + name.trim() + '!';
     }
 
+    /**
+     * @description Inserts one Account per non-blank name (bulk safe: a single DML).
+     */
     public static List<Account> createAccounts(List<String> names) {
         List<Account> accounts = new List<Account>();
         if (names == null || names.isEmpty()) {
@@ -44,6 +57,9 @@ public with sharing class SampleCiCdService {
         return accounts;
     }
 
+    /**
+     * @description Counts Accounts whose Name starts with the given prefix.
+     */
     public static Integer countAccountsByPrefix(String prefix) {
         if (String.isBlank(prefix)) {
             return 0;
