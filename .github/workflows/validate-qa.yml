@@ -73,12 +73,18 @@ jobs:
             --results-dir test-results
 
       # NEW: fail the PR if overall coverage is below the threshold
-      - name: Enforce code coverage threshold
+            - name: Enforce code coverage threshold
         env:
           MIN_COVERAGE: 75
         run: |
           SUMMARY=$(find test-results -name coverage-summary.json | head -n1)
-          COVERAGE=$(jq '.total.lines.pct' "$SUMMARY")
+          COVERAGE=$(jq -r '.total.lines.pct' "$SUMMARY")
+
+          if [ "$COVERAGE" = "Unknown" ]; then
+            echo "::notice::No coverable Apex lines in this deployment, skipping coverage gate."
+            exit 0
+          fi
+
           echo "Apex line coverage: ${COVERAGE}% (minimum ${MIN_COVERAGE}%)"
           awk -v c="$COVERAGE" -v m="$MIN_COVERAGE" 'BEGIN { exit (c+0 < m+0) }' \
             || { echo "::error::Coverage ${COVERAGE}% is below ${MIN_COVERAGE}%"; exit 1; }
