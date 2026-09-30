@@ -109,3 +109,39 @@ jobs:
         with:
           name: apex-test-results
           path: test-results
+
+  # Emails the validation result (pass, fail or cancelled) to everyone in NOTIFY_EMAILS.
+  # Runs even when validate-qa fails, because of `if: always()`.
+  notify:
+    name: Email validation result
+    needs: validate-qa
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send validation result email
+        # A mail problem (bad password, PR from a fork with no secrets) should never
+        # turn your pipeline red, so this step is allowed to fail quietly.
+        continue-on-error: true
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          to: ${{ secrets.NOTIFY_EMAILS }}
+          from: "Salesforce CI <${{ secrets.MAIL_USERNAME }}>"
+          subject: "${{ needs.validate-qa.result == 'success' && 'PASSED' || (needs.validate-qa.result == 'cancelled' && 'CANCELLED' || 'FAILED') }}: QA validation for PR #${{ github.event.pull_request.number }} in ${{ github.repository }}"
+          body: |
+            QA validation result: ${{ needs.validate-qa.result }}
+
+            Repository:  ${{ github.repository }}
+            Pull request: #${{ github.event.pull_request.number }} - ${{ github.event.pull_request.title }}
+            Author:      ${{ github.event.pull_request.user.login }}
+            Branch:      ${{ github.head_ref }} -> ${{ github.base_ref }}
+            Commit:      ${{ github.event.pull_request.head.sha }}
+
+            Pull request: ${{ github.event.pull_request.html_url }}
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Code Analyzer and Apex test/coverage reports are attached to the run as artifacts.
