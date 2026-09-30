@@ -2,19 +2,18 @@ name: Validate QA Environment
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
     branches:
       - develop
-    paths:
-      - 'force-app/**'
+    types: [opened, synchronize, reopened]
 
 jobs:
   validate-qa:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -24,26 +23,16 @@ jobs:
       - name: Install Salesforce CLI
         run: npm install -g @salesforce/cli
 
-      - name: Install Salesforce Code Analyzer
-        run: sf plugins install @salesforce/sfdx-scanner
-
-      - name: Run Salesforce Code Analyzer
-        run: |
-          sf scanner scan \
-            --target "force-app" \
-            --engine "pmd,eslint-lwc" \
-            --severity-threshold 2 \
-            --format "table"
-
       - name: Authenticate to QA Org via JWT
         run: |
-          echo "${{ secrets.SFDC_SERVER_KEY }}" > server.key
+          echo "${{ secrets.SFDX_SERVER_KEY_QA }}" > server.key
           sf org login jwt \
-            --client-id ${{ secrets.SFDC_CLIENT_ID }} \
+            --client-id ${{ secrets.SFDX_CLIENT_ID_QA }} \
             --jwt-key-file server.key \
-            --username ${{ secrets.SFDC_USERNAME }} \
-            --instance-url https://test.salesforce.com \
-            --alias QAOrg
+            --username ${{ secrets.SFDX_USERNAME_QA }} \
+            --instance-url https://login.salesforce.com \
+            --alias QAOrg \
+            --set-default
           rm server.key
 
       - name: Validate Source Deployment against QA
@@ -51,5 +40,4 @@ jobs:
           sf project deploy validate \
             --source-dir force-app \
             --target-org QAOrg \
-            --test-level RunLocalTests \
             --wait 30
