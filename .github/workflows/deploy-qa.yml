@@ -4,13 +4,46 @@ on:
   push:
     branches:
       - develop
+    # Only deploy when Salesforce-related files change (docs or workflow edits skip it).
+    paths:
+      - 'force-app/**'
+      - 'manifest/**'
+      - 'sfdx-project.json'
+      - '.forceignore'
+  # Manual run from the Actions tab. Tick full_deploy to redeploy everything, e.g. to
+  # repair drift after someone edited the QA org directly.
+  workflow_dispatch:
+    inputs:
+      full_deploy:
+        description: 'Deploy all of force-app instead of only the changes'
+        type: boolean
+        default: false
+
+# contents: write lets the last step move the "qa-last-deployed" tag (see below).
+permissions:
+  contents: write
+
+# Never run two deployments to the same org at once, and never cancel one mid-flight.
+concurrency:
+  group: deploy-qa
+  cancel-in-progress: false
+
+env:
+  SF_CLI_VERSION: latest        # pin to a specific version once you are happy with one
+  LAST_TAG: qa-last-deployed    # tag that marks the last commit successfully deployed to QA
 
 jobs:
   deploy-qa:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
     steps:
+      # fetch-depth 0 = full history and tags, which the delta comparison needs.
       - name: Checkout Source Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -18,23 +51,160 @@ jobs:
           node-version: '22'
 
       - name: Install Salesforce CLI
-        run: npm install -g @salesforce/cli
+        run: npm install -g @salesforce/cli@${{ env.SF_CLI_VERSION }}
 
+      # sfdx-git-delta works out which metadata changed between two commits.
+      # `echo y` accepts the prompt for installing a community (unsigned) plugin.
+      - name: Install sfdx-git-delta plugin
+        run: echo y | sf plugins install sfdx-git-delta
+
+      # The key goes through an env var (not pasted into the script) and is deleted
+      # by the trap even if login fails. Your existing secrets work unchanged.
       - name: Authenticate to QA Org via JWT
+        env:
+          SF_JWT_KEY: ${{ secrets.SFDX_SERVER_KEY_QA }}
+          SF_CLIENT_ID: ${{ secrets.SFDX_CLIENT_ID_QA }}
+          SF_USERNAME: ${{ secrets.SFDX_USERNAME_QA }}
         run: |
-          echo "${{ secrets.SFDX_SERVER_KEY_QA }}" > server.key
+          KEY_FILE="$RUNNER_TEMP/server.key"
+          trap 'rm -f "$KEY_FILE"' EXIT
+          printf '%s\n' "$SF_JWT_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
           sf org login jwt \
-            --client-id ${{ secrets.SFDX_CLIENT_ID_QA }} \
-            --jwt-key-file server.key \
-            --username ${{ secrets.SFDX_USERNAME_QA }} \
+            --client-id "$SF_CLIENT_ID" \
+            --jwt-key-file "$KEY_FILE" \
+            --username "$SF_USERNAME" \
             --instance-url https://login.salesforce.com \
             --alias QAOrg \
             --set-default
-          rm server.key
 
-      - name: Deploy Source to QA
+      # Delta = only what changed since the last SUCCESSFUL deploy (not just since the
+      # previous push). If a deploy fails, its changes are retried on the next run
+      # instead of being silently skipped. Falls back to a full deploy when there is no
+      # safe starting point.
+      - name: Decide deploy mode (delta or full)
+        id: mode
+        env:
+          FULL_DEPLOY: ${{ inputs.full_deploy }}
+        run: |
+          MODE=delta
+          FROM=""
+          if [ "$FULL_DEPLOY" = "true" ]; then
+            MODE=full
+            REASON="manual run with full_deploy ticked"
+          elif ! git rev-parse -q --verify "refs/tags/${LAST_TAG}" > /dev/null; then
+            MODE=full
+            REASON="no ${LAST_TAG} tag yet (first run), deploying everything once"
+          else
+            FROM=$(git rev-parse "refs/tags/${LAST_TAG}^{commit}")
+            if git merge-base --is-ancestor "$FROM" HEAD; then
+              REASON="changes since last successful deploy (${FROM:0:7})"
+            else
+              MODE=full
+              REASON="last deployed commit is not in this branch history (history was rewritten)"
+            fi
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "from=$FROM" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          echo "Deploy mode: $MODE ($REASON)"
+
+      - name: Generate delta package
+        if: steps.mode.outputs.mode == 'delta'
+        id: delta
+        env:
+          FROM_SHA: ${{ steps.mode.outputs.from }}
+        run: |
+          mkdir -p changed-sources
+          sf sgd source delta \
+            --from "$FROM_SHA" \
+            --to "$GITHUB_SHA" \
+            --source-dir force-app \
+            --output-dir changed-sources
+
+          echo "----- package.xml (added/changed) -----"
+          cat changed-sources/package/package.xml
+          echo "----- destructiveChanges.xml (deleted) -----"
+          cat changed-sources/destructiveChanges/destructiveChanges.xml
+
+          HAS_CHANGES=false
+          HAS_DESTRUCTIVE=false
+          if grep -q "<members>" changed-sources/package/package.xml; then HAS_CHANGES=true; fi
+          if grep -q "<members>" changed-sources/destructiveChanges/destructiveChanges.xml; then HAS_DESTRUCTIVE=true; fi
+          echo "has_changes=$HAS_CHANGES" >> "$GITHUB_OUTPUT"
+          echo "has_destructive=$HAS_DESTRUCTIVE" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy delta to QA
+        if: steps.mode.outputs.mode == 'delta' && (steps.delta.outputs.has_changes == 'true' || steps.delta.outputs.has_destructive == 'true')
+        env:
+          HAS_DESTRUCTIVE: ${{ steps.delta.outputs.has_destructive }}
+        run: |
+          ARGS=(--manifest changed-sources/package/package.xml --target-org QAOrg --wait 30)
+          # Deleted components are removed AFTER the new/changed ones deploy.
+          if [ "$HAS_DESTRUCTIVE" = "true" ]; then
+            ARGS+=(--post-destructive-changes changed-sources/destructiveChanges/destructiveChanges.xml)
+          fi
+          sf project deploy start "${ARGS[@]}"
+
+      - name: Nothing to deploy
+        if: steps.mode.outputs.mode == 'delta' && steps.delta.outputs.has_changes != 'true' && steps.delta.outputs.has_destructive != 'true'
+        run: echo "::notice::No Salesforce metadata changes since the last deploy, nothing to deploy."
+
+      # Original behaviour, used for the first run, manual full deploys and fallbacks.
+      - name: Deploy full source to QA
+        if: steps.mode.outputs.mode == 'full'
         run: |
           sf project deploy start \
             --source-dir force-app \
             --target-org QAOrg \
             --wait 30
+
+      # Only runs if every step above succeeded, so the tag always points at a commit
+      # that is really in QA. The next delta starts from here.
+      - name: Record last successfully deployed commit
+        if: success()
+        run: |
+          git tag -f "$LAST_TAG" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$LAST_TAG"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### Deploy to QA"
+            echo "- Mode: ${{ steps.mode.outputs.mode }}"
+            echo "- Reason: ${{ steps.mode.outputs.reason }}"
+            echo "- Commit: $GITHUB_SHA"
+            echo "- Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Emails the deployment result to everyone in NOTIFY_EMAILS. Uses the same
+  # MAIL_USERNAME, MAIL_PASSWORD and NOTIFY_EMAILS secrets as the validation emails.
+  notify:
+    name: Email deployment result
+    needs: deploy-qa
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send deployment result email
+        continue-on-error: true   # a mail problem must never fail the pipeline
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          to: ${{ secrets.NOTIFY_EMAILS }}
+          from: "Salesforce CI <${{ secrets.MAIL_USERNAME }}>"
+          subject: "${{ needs.deploy-qa.result == 'success' && 'DEPLOYED' || 'DEPLOYMENT FAILED' }}: QA (${{ github.repository }})"
+          body: |
+            QA deployment result: ${{ needs.deploy-qa.result }}
+            Deploy mode: ${{ needs.deploy-qa.outputs.mode }}
+
+            Repository: ${{ github.repository }}
+            Branch:     ${{ github.ref_name }}
+            Commit:     ${{ github.sha }}
+            Pushed by:  ${{ github.actor }}
+
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
