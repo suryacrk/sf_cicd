@@ -1,0 +1,68 @@
+# pr-notifications.yml
+# Emails everyone in NOTIFY_EMAILS when a pull request is opened and when it is merged.
+# Validation and deployment results are emailed by the `notify` jobs in their own workflows.
+
+name: PR Email Notifications
+
+on:
+  pull_request:
+    branches: [develop, main]
+    types: [opened, closed]
+
+jobs:
+  pr-opened:
+    name: Email when a PR is opened
+    if: github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send PR opened email
+        continue-on-error: true   # a mail problem must never break the pipeline
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          to: ${{ secrets.NOTIFY_EMAILS }}
+          from: "Salesforce CI <${{ secrets.MAIL_USERNAME }}>"
+          subject: "PR opened: #${{ github.event.pull_request.number }} ${{ github.event.pull_request.title }} (${{ github.repository }})"
+          body: |
+            A new pull request was opened.
+
+            Repository:  ${{ github.repository }}
+            Pull request: #${{ github.event.pull_request.number }} - ${{ github.event.pull_request.title }}
+            Author:      ${{ github.event.pull_request.user.login }}
+            Branch:      ${{ github.head_ref }} -> ${{ github.base_ref }}
+
+            ${{ github.event.pull_request.html_url }}
+
+            The QA validation pipeline starts automatically. You will get a second email with its result.
+
+  pr-merged:
+    name: Email when a PR is merged
+    # `closed` also fires for PRs closed WITHOUT merging, so check the merged flag.
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send PR merged email
+        continue-on-error: true
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          to: ${{ secrets.NOTIFY_EMAILS }}
+          from: "Salesforce CI <${{ secrets.MAIL_USERNAME }}>"
+          subject: "PR merged: #${{ github.event.pull_request.number }} ${{ github.event.pull_request.title }} (${{ github.repository }})"
+          body: |
+            A pull request was merged.
+
+            Repository:  ${{ github.repository }}
+            Pull request: #${{ github.event.pull_request.number }} - ${{ github.event.pull_request.title }}
+            Merged by:   ${{ github.event.pull_request.merged_by.login }}
+            Branch:      ${{ github.head_ref }} -> ${{ github.base_ref }}
+
+            ${{ github.event.pull_request.html_url }}
