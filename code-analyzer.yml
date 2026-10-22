@@ -1,0 +1,16 @@
+# code-analyzer.yml
+# Salesforce Code Analyzer v5 configuration. Keep this file in the repo root;
+# `sf code-analyzer run` loads it automatically from the working directory.
+
+engines:
+  regex:
+    custom_rules:
+      # Hardcoded record IDs differ between orgs (Prod vs sandboxes), so code that
+      # works in one org breaks in another. Query the ID or use Custom Metadata.
+      NoHardcodedRecordIds:
+        regex: /['"](001|003|005|006|00Q|012|00D)[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?['"]/g
+        file_extensions: [".cls", ".trigger"]
+        description: "Hardcoded Salesforce record IDs differ between orgs and break deployments."
+        violation_message: "Hardcoded record ID found. Query it or store it in Custom Metadata."
+        severity: "High"
+        tags: ["Recommended", "CodeStyle"]
